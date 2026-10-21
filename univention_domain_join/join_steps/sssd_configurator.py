@@ -114,14 +114,21 @@ class SssdConfigurator(ConflictChecker):
 
     @execute_as_root
     def restart_sssd(self) -> None:
-        """Enable sssd at boot and (re)start it to pick up the new config."""
+        """Enable sssd at boot and (re)start it to pick up the new config.
+
+        On failure the systemctl output is logged, because the actual
+        reason (e.g. a missing sssd-ldap/sssd-krb5 provider package, or a
+        config error) is otherwise invisible.
+        """
         userinfo_logger.info('Restarting sssd')
 
-        subprocess.check_output(
-            ['systemctl', 'enable', '--now', 'sssd'],
-            stderr=subprocess.STDOUT
-        )
-        subprocess.check_output(
-            ['systemctl', 'restart', 'sssd'],
-            stderr=subprocess.STDOUT
-        )
+        for cmd in (['systemctl', 'enable', 'sssd'], ['systemctl', 'restart', 'sssd']):
+            try:
+                subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+            except subprocess.CalledProcessError as e:
+                userinfo_logger.critical(
+                    '%r failed:\n%s\nCheck "journalctl -u sssd" for details. A common cause on '
+                    'minimal installations is a missing provider package (dnf install sssd-ldap sssd-krb5).'
+                    % (cmd, e.output.decode('utf-8', 'replace'))
+                )
+                raise

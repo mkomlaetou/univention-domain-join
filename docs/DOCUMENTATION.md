@@ -214,8 +214,50 @@ usage: univention-domain-join-cli [-h] [--version] [--username USERNAME]
 | `--dc-ip IP` | IP address of the UCS DC to join against. Skips domain/DC auto-detection entirely; use the DC master's IP if unsure. |
 | `--force-ucs-dns` | Reconfigure the system's DNS to use the UCS DCs as nameservers. Default: keep the existing network settings (the client must then already be able to resolve the DC's and master's host names). |
 | `--register-dns` | Register a DNS record (A record, plus PTR if a matching reverse zone exists) for this machine in the UCS DNS zone, on the machine's computer object. **Only done if the machine's primary IP address is statically configured** (NetworkManager `ipv4.method=manual` or `BOOTPROTO=none/static` in ifcfg); DHCP clients are skipped because a record written at join time would go stale with the next lease. |
+| `--disjoin` | Leave the domain instead of joining: deletes the machine's computer object on the DC (its DNS records go with it) and cleans up all local configuration (see below). Asks for confirmation unless `--yes` is given. |
+| `--local-only` | With `--disjoin`: only clean up the local machine and keep the computer object on the DC. No credentials or DC connectivity needed. |
+| `--yes` | With `--disjoin`: skip the confirmation prompt. |
 | `--logfile FILE`, `-L FILE` | Log file path (default: `/var/log/univention/domain-join-cli.log`). |
 | `--version` | Print the version and exit. |
+
+### Disjoin (leaving the domain)
+
+`--disjoin` reverses the join:
+
+- Deletes the machine's computer object on the DC via udm (with the same
+  admin credentials as the join). The DNS records attached to the object
+  (A/PTR records created by `--register-dns`) are separate LDAP objects
+  under `cn=dns` and are deleted explicitly first — UCS does not remove
+  them automatically with the computer object. Use `--local-only` to
+  skip the DC side entirely and keep the computer object and records.
+- Stops and disables `sssd`.
+- Reverts PAM: selects the stock authselect `sssd` profile (keeping
+  `with-mkhomedir` for local users) and deletes the `custom/ucs` profile
+  (`authconfig --disablesssd --disablesssdauth --disablemkhomedir` on
+  systems without authselect).
+- Restores every configuration file that existed before the join from the
+  newest `/var/univention-backup/<timestamp>_domain-join/` backup
+  (`krb5.conf`, `ldap.conf`, `sssd.conf`, `group.conf`, `nsswitch.conf`,
+  the lightdm drop-in, `resolv.conf`) and deletes join-created files
+  that have no pre-join version.
+- Removes `/etc/machine.secret`, the UCS root certificate
+  (`/etc/univention/ssl/ucsCA/CAcert.pem`) and the trust store anchor
+  (`/etc/pki/ca-trust/source/anchors/UCSdomain.crt`), then runs
+  `update-ca-trust extract`.
+- With `--force-ucs-dns` also given: hands the NetworkManager DNS
+  settings of all active connections back to DHCP (reversing the join's
+  DNS reconfiguration).
+
+Examples:
+
+```
+# full disjoin (removes the computer object on the DC):
+sudo univention-domain-join-cli --disjoin --dc-ip 10.0.0.1 \
+    --username Administrator --password-file /root/admin.pw
+
+# local cleanup only, scripted, no DC contact:
+sudo univention-domain-join-cli --disjoin --local-only --yes
+```
 
 ### Examples
 
@@ -254,9 +296,14 @@ Install the dependencies from the distribution repositories:
 
 ```
 sudo dnf install python3-dns python3-ldap openssh-clients sshpass \
-    openldap-clients sssd krb5-workstation authselect \
+    openldap-clients sssd sssd-ldap sssd-krb5 krb5-workstation authselect \
     oddjob-mkhomedir oddjob wget pip
 ```
+
+Note that the base `sssd` package alone is not enough: the join config
+uses `id_provider = ldap` and `auth_provider = krb5`, which require the
+`sssd-ldap` and `sssd-krb5` provider packages (sssd fails to start
+without them). The CLI checks for them up front.
 
 On RHEL and its rebuilds (Rocky, Alma, Oracle), `sshpass` is in the EPEL
 repository, which has to be enabled first:
@@ -312,6 +359,20 @@ live immediately, but a newly created zone requires
 `systemctl restart bind9` on the DC. Also check that the zone has a
 nameserver assigned (UMC → DNS → zone settings), otherwise BIND refuses
 to load it ("zone has no NS records").
+
+**"Failed to init Kerberos context [Permission denied]" after a
+disjoin/rejoin cycle (SELinux).** Configuration files restored from
+`/var/univention-backup/` must not keep the `var_t` SELinux label of the
+backup directory — confined services like `sssd_be` (`sssd_t`) may not
+read them (see `ausearch -m avc -ts recent`). The disjoiner restores
+content without extended attributes and runs `restorecon` on every
+restored file. To fix an already affected system:
+
+```
+restorecon -v /etc/krb5.conf /etc/openldap/ldap.conf /etc/sssd/sssd.conf \
+    /etc/nsswitch.conf /etc/authselect/nsswitch.conf /etc/security/group.conf
+systemctl restart sssd
+```
 
 **Verifying a successful join** (after a reboot):
 

@@ -47,7 +47,7 @@ sudo dnf install ~/rpmbuild/RPMS/noarch/univention-domain-join-cli-1.0.0-1.*.noa
 
 ```
 sudo dnf install python3-dns python3-ldap openssh-clients sshpass \
-    openldap-clients sssd krb5-workstation authselect \
+    openldap-clients sssd sssd-ldap sssd-krb5 krb5-workstation authselect \
     oddjob-mkhomedir oddjob wget pip
 sudo pip install .
 ```
@@ -75,6 +75,16 @@ Additionally, this port provides `--register-dns`: it registers an A record
 the UCS DNS zone. Registration only happens when the machine's primary IP
 address is statically configured — DHCP clients are skipped, because a
 record written at join time would go stale with the next lease.
+
+To leave the domain again, use `--disjoin`: it deletes the machine's
+computer object on the DC (including its DNS records), restores the
+pre-join configuration from the backup, reverts PAM to the stock
+authselect profile, removes the UCS root certificate and stops SSSD:
+
+```
+sudo univention-domain-join-cli --disjoin --dc-ip 10.0.0.1
+sudo univention-domain-join-cli --disjoin --local-only --yes  # local cleanup only
+```
 
 The GUI of the original project was not ported — only the CLI is provided.
 

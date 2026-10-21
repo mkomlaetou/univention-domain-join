@@ -172,13 +172,15 @@ class DnsRecordRegistrar(object):
     def udm_dns_modify_command(self, udm_type: str, dn: str, admin_dn: str, admin_username: str, ip: str, attribute: str, zone_value: str, set_ip: bool = True) -> list:
         """Build the udm modify command. The zone entry value contains a
         space ('<zone DN> <ip>'); the ssh() helper quotes each argument, so
-        it arrives as a single value on the DC."""
+        it arrives as a single value on the DC. --set (not --append) is
+        used so that re-running the join is idempotent and does not
+        produce 'value exists' warnings."""
         cmd = [
             '/usr/sbin/udm', udm_type, 'modify',
             '--binddn', admin_dn,
             '--bindpwdfile', PW(admin_username),
             '--dn', dn,
-            '--append', '%s=%s %s' % (attribute, zone_value, ip),
+            '--set', '%s=%s %s' % (attribute, zone_value, ip),
         ]
         if set_ip:
             cmd += ['--set', 'ip=%s' % ip]

@@ -7,7 +7,9 @@ Parses the command line, runs pre-flight checks (root privileges,
 supported distribution, required dependencies), discovers the UCS domain
 and DC master, asks for domain administrator credentials, fetches the UCR
 variables from the DC via SSH and then hands over to the Joiner, which
-performs the actual join steps.
+performs the actual join steps. With --disjoin it does the reverse:
+the Disjoiner removes the computer object on the DC and cleans up the
+local configuration.
 """
 
 import argparse
@@ -38,6 +40,13 @@ REQUIRED_PYTHON_MODULES = {
     'dns': 'python3-dns',
     'ldap': 'python3-ldap',
 }
+# sssd provider modules and the RPM packages containing them. The base
+# sssd package alone cannot serve id_provider=ldap / auth_provider=krb5.
+SSSD_PROVIDERS = {
+    'ldap': 'sssd-ldap',
+    'krb5': 'sssd-krb5',
+}
+SSSD_PROVIDER_PATHS = ('/usr/lib64/sssd/libsss_%s.so', '/usr/lib/sssd/libsss_%s.so')
 
 
 def check_if_run_as_root() -> None:
@@ -64,6 +73,11 @@ def check_dependencies() -> None:
     )
     missing_packages.update(
         package for module, package in REQUIRED_PYTHON_MODULES.items() if not module_available(module)
+    )
+    missing_packages.update(
+        package
+        for provider, package in SSSD_PROVIDERS.items()
+        if not any(os.path.exists(path % provider) for path in SSSD_PROVIDER_PATHS)
     )
     if not (shutil.which('wget') or shutil.which('curl')):
         missing_packages.add('wget')
@@ -181,13 +195,81 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--dc-ip', help='IP address of the UCS domain controller to join to. Can be used if --domain does not work. If unsure, use the IP of the UCS Master', metavar="IP")
     parser.add_argument('--force-ucs-dns', action='store_true', help='Change the system\'s DNS settings and set the UCS DC as DNS nameserver (default is to use the standard network settings, but make sure the your system can resolve the hostname of the UCS DC and the UCS master system)')
     parser.add_argument('--register-dns', action='store_true', help='Register a DNS record for this machine in the UCS DNS zone. Only done if the primary IP address of this machine is statically configured; DHCP clients are skipped')
+    parser.add_argument('--disjoin', action='store_true', help='Leave the UCS domain: remove the computer object on the DC and clean up all local configuration created by the join')
+    parser.add_argument('--local-only', action='store_true', help='With --disjoin: only clean up the local machine, do not remove the computer object on the DC (no credentials needed)')
+    parser.add_argument('--yes', action='store_true', help='With --disjoin: do not ask for confirmation')
     parser.add_argument("--logfile", "-L", help="Path to log file %(default)s", metavar="FILE", default="/var/log/univention/domain-join-cli.log")
     args = parser.parse_args()
     return args
 
 
+def resolve_dc_ip(args: argparse.Namespace) -> str:
+    """Determine the IP of the DC master, from --dc-ip or via domain discovery."""
+    if args.dc_ip:
+        return args.dc_ip
+    if not args.domain:
+        args.domain = get_ucs_domainname()
+        getLogger("userinfo").info('Automatically detected the domain %r.' % (args.domain))
+    if not args.domain:
+        getLogger("userinfo").critical(
+            'Unable to determine the UCS domain automatically. Please provide '
+            'it using the --domain parameter or use the tool with --dc-ip.'
+        )
+        exit(1)
+    dc_ip = get_master_ip_through_dns(args.domain)
+    if not dc_ip:
+        getLogger("userinfo").critical(
+            'No DNS record for the DC master could be found. Please make sure that '
+            'the DC master is the DNS server for this computer or use this tool with --dc-ip.'
+        )
+        exit(1)
+    return dc_ip
+
+
+def get_admin_credentials(args: argparse.Namespace) -> tuple:
+    """Return (username, password), from the arguments or interactively."""
+    password = None
+    if args.password:
+        password = args.password
+    elif args.password_file:
+        try:
+            with open(args.password_file) as password_file:
+                password = password_file.read().strip()
+        except IOError:
+            getLogger("userinfo").error('Error: The password file could not be read.')
+    if not args.username:
+        args.username = get_admin_username()
+    if not password:
+        password = get_admin_password(args.username)
+    return args.username, password
+
+
+def disjoin(args: argparse.Namespace) -> None:
+    """Leave the domain: remove the computer object on the DC and clean up locally."""
+    from univention_domain_join.disjoiner import Disjoiner
+
+    dc_ip = username = password = ldap_base = None
+    if not args.local_only:
+        dc_ip = resolve_dc_ip(args)
+        username, password = get_admin_credentials(args)
+        check_if_ssh_works_with_given_account(dc_ip, username, password)
+        ucr_variables = get_ucr_variables_from_dc(dc_ip, username, password)
+        ldap_base = ucr_variables['ldap_base']
+
+    if not args.yes:
+        answer = input(
+            'This will remove this machine from the UCS domain%s. Continue? [y/N] '
+            % ('' if args.local_only else ' (computer object on the DC will be deleted)')
+        )
+        if answer.lower() not in ('y', 'yes'):
+            getLogger("userinfo").info('Aborted.')
+            return
+
+    Disjoiner(dc_ip, username, password, ldap_base, local_only=args.local_only, revert_dns=args.force_ucs_dns).disjoin()
+
+
 def main() -> None:
-    """Entry point: pre-flight checks, DC discovery, credentials, then join."""
+    """Entry point: pre-flight checks, then join (default) or disjoin."""
     args = parse_args()
 
     check_if_run_as_root()
@@ -200,40 +282,12 @@ def main() -> None:
     check_dependencies()
 
     try:
-        if not args.dc_ip:
-            if not args.domain:
-                args.domain = get_ucs_domainname()
-                getLogger("userinfo").info('Automatically detected the domain %r.' % (args.domain))
-            if not args.domain:
-                getLogger("userinfo").critical(
-                    'Unable to determine the UCS domain automatically. Please provide '
-                    'it using the --domain parameter or use the tool with --dc-ip.'
-                )
-                exit(1)
-            args.dc_ip = get_master_ip_through_dns(args.domain)
-            if not args.dc_ip:
-                getLogger("userinfo").critical(
-                    'No DNS record for the DC master could be found. Please make sure that '
-                    'the DC master is the DNS server for this computer or use this tool with --dc-ip.'
-                )
-                exit(1)
+        if args.disjoin:
+            disjoin(args)
+            return
 
-        if args.password:
-            password = args.password
-        elif args.password_file:
-            try:
-                with open(args.password_file) as password_file:
-                    password = password_file.read().strip()
-            except IOError:
-                getLogger("userinfo").error('Error: The password file could not be read.')
-                password = None
-        else:
-            password = None
-
-        if not args.username:
-            args.username = get_admin_username()
-        if not password:
-            password = get_admin_password(args.username)
+        args.dc_ip = resolve_dc_ip(args)
+        args.username, password = get_admin_credentials(args)
         check_if_ssh_works_with_given_account(args.dc_ip, args.username, password)
         ucr_variables = get_ucr_variables_from_dc(args.dc_ip, args.username, password)
 

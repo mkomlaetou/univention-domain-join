@@ -18,6 +18,8 @@ Requires:       openssh-clients
 Requires:       sshpass
 Requires:       openldap-clients
 Requires:       sssd
+Requires:       sssd-ldap
+Requires:       sssd-krb5
 Requires:       krb5-workstation
 Requires:       authselect
 Requires:       oddjob-mkhomedir
