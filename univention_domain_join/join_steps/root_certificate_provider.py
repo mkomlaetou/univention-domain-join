@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2017-2025 Univention GmbH
 # SPDX-License-Identifier: AGPL-3.0-only
+"""Download the UCS root certificate and install it on the client.
+
+The certificate is stored at the same path as on Debian/Ubuntu clients
+(/etc/univention/ssl/ucsCA/CAcert.pem) because sssd.conf and ldap.conf
+reference it there, and additionally added to the system trust store with
+update-ca-trust — the RPM equivalent of Debian's update-ca-certificates,
+using /etc/pki/ca-trust/source/anchors instead of
+/usr/local/share/ca-certificates.
+"""
 
 import logging
 import os
@@ -21,16 +30,21 @@ CA_TRUST_CERT = os.path.join(CA_TRUST_ANCHORS, 'UCSdomain.crt')
 
 
 class RootCertificateProvider(object):
+    """Installs the UCS root CA locally and into the system trust store."""
+
     def provide_ucs_root_certififcate(self, dc_ip: str) -> None:
+        """Download the UCS root CA from the DC and trust it, unless already done."""
         if not self.ucs_root_certificate_available_locally():
             self.download_ucs_root_certificate(dc_ip)
             self.add_certificate_to_certificate_store()
 
     def ucs_root_certificate_available_locally(self) -> bool:
+        """Return True if the certificate is already in both locations."""
         return os.path.isfile(UCS_CA_CERT) and os.path.isfile(CA_TRUST_CERT)
 
     @execute_as_root
     def download_ucs_root_certificate(self, dc_ip: str) -> None:
+        """Download http://<dc>/ucs-root-ca.crt to UCS_CA_CERT using wget or curl."""
         userinfo_logger.info('Downloading the UCS root certificate to %s' % UCS_CA_CERT)
 
         os.makedirs(os.path.dirname(UCS_CA_CERT), exist_ok=True)
@@ -43,6 +57,7 @@ class RootCertificateProvider(object):
 
     @execute_as_root
     def add_certificate_to_certificate_store(self) -> None:
+        """Copy the certificate into the ca-trust anchors and run update-ca-trust."""
         userinfo_logger.info('Adding the UCS root certificate to the certificate store')
 
         os.makedirs(CA_TRUST_ANCHORS, exist_ok=True)

@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2017-2025 Univention GmbH
 # SPDX-License-Identifier: AGPL-3.0-only
+"""Orchestration of the domain join.
+
+The Joiner runs the individual join steps (DNS, LDAP, SSSD, PAM, login
+manager, Kerberos) in the right order and takes care of the backup of all
+configuration files before anything is modified.
+"""
 
 import logging
 import os
@@ -20,14 +26,21 @@ userinfo_logger = logging.getLogger('userinfo')
 
 
 class DomainJoinException(Exception):
-    pass
+    """Raised when a pre-join check finds a problem that makes joining unsafe."""
 
 
 class DcResolveException(Exception):
-    pass
+    """Raised when the UCS master or DC host names cannot be resolved via DNS."""
 
 
 class Joiner(object):
+    """Runs the domain join steps in order against a given UCS DC.
+
+    Holds everything the join steps need, derived from the UCR variables
+    fetched from the DC (domain name, nameservers, LDAP master/base/server
+    name, Kerberos realm) plus the CLI credentials and options.
+    """
+
     def __init__(self, ucr_variables: Dict[str, str], admin_username: str, admin_pw: str, dc_ip: str, skip_login_manager: bool, force_ucs_dns: bool) -> None:
         self.admin_username = admin_username
         self.admin_pw = admin_pw
@@ -46,6 +59,7 @@ class Joiner(object):
         self.kerberos_realm = ucr_variables['kerberos_realm']
 
     def check_if_join_is_possible_without_problems(self) -> None:
+        """Abort the join if a conflicting login manager configuration is found."""
         if not self.skip_login_manager and LoginManagerConfigurator().configuration_conflicts():
             userinfo_logger.critical(
                 'Joining the UCS domain is not safely possible.\n'
@@ -54,6 +68,10 @@ class Joiner(object):
             raise DomainJoinException()
 
     def create_backup_of_config_files(self) -> None:
+        """Back up every config file the join steps may modify.
+
+        All backups go into /var/univention-backup/<timestamp>_domain-join/.
+        """
         backup_dir = self.create_backup_dir()
         if self.force_ucs_dns:
             DnsConfigurator(self.nameservers, self.domain).backup(backup_dir)
@@ -67,11 +85,18 @@ class Joiner(object):
 
     @execute_as_root
     def create_backup_dir(self) -> str:
+        """Create and return the timestamped backup directory."""
         backup_dir = os.path.join('/var/univention-backup', time.strftime("%Y%m%d%H%M%S_domain-join", time.gmtime()))
         os.makedirs(backup_dir)
         return backup_dir
 
     def join_domain(self) -> None:
+        """Perform the actual join: LDAP entry, SSSD, PAM, login manager, Kerberos.
+
+        Optionally reconfigures DNS first (--force-ucs-dns). The temporary
+        admin password file on the DC is always removed afterwards, even on
+        failure.
+        """
         try:
             if self.force_ucs_dns:
                 userinfo_logger.info('changing network/dns configuration as requested.')

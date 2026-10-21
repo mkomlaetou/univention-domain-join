@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2017-2025 Univention GmbH
 # SPDX-License-Identifier: AGPL-3.0-only
+"""Point the client's DNS at the UCS DCs (only used with --force-ucs-dns).
+
+Prefers NetworkManager (nmcli), which manages DNS on most RPM installs,
+and falls back to writing /etc/resolv.conf directly when NetworkManager
+is not running. Replaces the resolvconf/dhclient based configuration of
+the Debian/Ubuntu version.
+"""
 
 import logging
 import shutil
@@ -16,10 +23,16 @@ userinfo_logger = logging.getLogger('userinfo')
 
 
 class DnsConfigurationException(Exception):
-    pass
+    """Raised when DNS cannot be configured or does not work afterwards."""
 
 
 class DnsConfigurator(object):
+    """Configure the client's DNS through whichever backend works on this system.
+
+    Uses NetworkManager if available, otherwise writes /etc/resolv.conf
+    directly. Validates the UCR-provided nameservers/domain on creation.
+    """
+
     def __init__(self, nameservers: List[str], domain: str) -> None:
         self.nameservers = nameservers
         self.domain = domain
@@ -40,16 +53,23 @@ class DnsConfigurator(object):
         self.working_configurator: BaseDnsConfigurator = DnsConfiguratorNetworkManager() if DnsConfiguratorNetworkManager().works_on_this_system() else DnsConfiguratorResolvConf()
 
     def backup(self, backup_dir: str) -> None:
+        """Back up the DNS configuration via the selected backend."""
         self.working_configurator.backup(backup_dir)
 
     @execute_as_root
     def configure_dns(self) -> None:
+        """Apply the UCS nameservers, fix mdns ordering, then verify DNS works."""
         self.working_configurator.configure_dns(self.nameservers, self.domain)
         self.fix_mdns_nsswitch()
         self.check_if_dns_works()
 
     @execute_as_root
     def fix_mdns_nsswitch(self) -> None:
+        """Move mdns4_minimal after dns in nsswitch.conf for .local domains.
+
+        Only relevant when the UCS domain ends in .local; otherwise a
+        no-op.
+        """
         # With a .local domain, mdns must not shadow regular DNS lookups.
         # This mirrors the upstream fix; RPM systems ship mdns4_minimal
         # through nss-mdns in /etc/nsswitch.conf as well.
@@ -69,6 +89,7 @@ class DnsConfigurator(object):
         ], stderr=subprocess.STDOUT)
 
     def check_if_dns_works(self) -> None:
+        """Verify the UCS SRV record resolves with the new settings; raise if not."""
         resolver = dns.resolver.Resolver()
         query = getattr(resolver, 'resolve', None) or resolver.query
         try:
@@ -82,6 +103,8 @@ class DnsConfigurator(object):
 
 
 class BaseDnsConfigurator(object):
+    """Interface for the DNS backend implementations."""
+
     def backup(self, backup_dir: str) -> None:
         raise NotImplementedError()
 
@@ -90,7 +113,14 @@ class BaseDnsConfigurator(object):
 
 
 class DnsConfiguratorNetworkManager(BaseDnsConfigurator):
+    """Set DNS servers via nmcli on all active NetworkManager connections.
+
+    The common case on RPM desktop and server installs, where
+    NetworkManager owns /etc/resolv.conf.
+    """
+
     def works_on_this_system(self) -> bool:
+        """Return True if nmcli exists and NetworkManager has active connections."""
         if not shutil.which('nmcli'):
             return False
         proc = subprocess.Popen(
@@ -109,6 +139,7 @@ class DnsConfiguratorNetworkManager(BaseDnsConfigurator):
 
     @execute_as_root
     def configure_dns(self, nameservers: List[str], domain: str) -> None:
+        """Set the UCS nameservers/search domain on every active connection and reapply."""
         p = subprocess.Popen(
             ['nmcli', '-t', '-f', 'NAME,UUID,DEVICE', 'connection', 'show', '--active'],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE
@@ -137,6 +168,7 @@ class DnsConfiguratorResolvConf(BaseDnsConfigurator):
 
     @execute_as_root
     def backup(self, backup_dir: str) -> None:
+        """Back up /etc/resolv.conf if it is a regular file (not a symlink)."""
         import os
         if os.path.isfile('/etc/resolv.conf') and not os.path.islink('/etc/resolv.conf'):
             os.makedirs(os.path.join(backup_dir, 'etc'), exist_ok=True)
@@ -144,6 +176,7 @@ class DnsConfiguratorResolvConf(BaseDnsConfigurator):
 
     @execute_as_root
     def configure_dns(self, nameservers: List[str], domain: str) -> None:
+        """Write the UCS nameservers and search domain to /etc/resolv.conf."""
         userinfo_logger.info('Writing /etc/resolv.conf')
         with open('/etc/resolv.conf', 'w') as conf_file:
             for nameserver in nameservers:

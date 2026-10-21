@@ -88,6 +88,12 @@ written to `/var/log/univention/domain-join-cli.log`.
   (same path as on Ubuntu clients, referenced by `sssd.conf`) and additionally
   added to the system trust store.
 
+## Documentation
+
+Full documentation — architecture, join flow, files modified on the
+client, CLI reference, dependencies and troubleshooting — is available in
+[docs/DOCUMENTATION.md](docs/DOCUMENTATION.md).
+
 ## License
 
 This project is derived from univention-domain-join and is licensed under the

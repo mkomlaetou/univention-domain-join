@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2017-2025 Univention GmbH
 # SPDX-License-Identifier: AGPL-3.0-only
+"""Auto-detection of the UCS domain and its DC master via DNS.
+
+A UCS domain publishes a ``_domaincontroller_master._tcp.<domain>`` SRV
+record; it is used both to find the master and to verify that a candidate
+domain really is a UCS domain.
+"""
 
 import ipaddress
 import socket
@@ -11,6 +17,7 @@ import dns.resolver
 
 
 def _srv_query(name: str) -> list:
+    """Query SRV records; works with dnspython 1.x (RHEL 8) and 2.x alike."""
     # dnspython < 2.0 (e.g. RHEL 8's python3-dns) only knows query(),
     # newer versions renamed it to resolve().
     resolver = dns.resolver.Resolver()
@@ -19,6 +26,7 @@ def _srv_query(name: str) -> list:
 
 
 def get_master_ip_through_dns(domain: str) -> str:
+    """Return the IP of the UCS DC master via its SRV record, or '' on failure."""
     try:
         response = _srv_query('_domaincontroller_master._tcp.%s.' % (domain,))
         master_fqdn = response[0].target.canonicalize().split(1)[0].to_text()
@@ -28,6 +36,12 @@ def get_master_ip_through_dns(domain: str) -> str:
 
 
 def get_ucs_domainname() -> str:
+    """Auto-detect the UCS domain of this client.
+
+    Tries, in order: the domain part of the local FQDN, reverse DNS of the
+    machine's own IP addresses, and reverse DNS of the configured
+    nameservers. Returns '' if no UCS domain could be found.
+    """
     domainname = get_ucs_domainname_via_local_configuration()
     if not domainname:
         domainname = get_ucs_domainname_via_reverse_dns()
@@ -37,6 +51,7 @@ def get_ucs_domainname() -> str:
 
 
 def get_ucs_domainname_via_local_configuration() -> str:
+    """Return the domain part of the local FQDN, or '' if there is none."""
     try:
         domainname = socket.getfqdn().split('.', 1)[1]
     except Exception:
@@ -45,14 +60,17 @@ def get_ucs_domainname_via_local_configuration() -> str:
 
 
 def get_ucs_domainname_via_reverse_dns() -> str:
+    """Derive the UCS domain from reverse DNS of this machine's IP addresses."""
     return ips2name(get_all_ip_addresses())
 
 
 def get_ucs_domainname_of_dns_server() -> str:
+    """Derive the UCS domain from reverse DNS of the configured nameservers."""
     return ips2name(get_nameservers())
 
 
 def get_nameservers() -> Set[str]:
+    """Return the nameserver IPs configured in /etc/resolv.conf."""
     nameservers = set()
     try:
         with open('/etc/resolv.conf') as f:
@@ -66,6 +84,7 @@ def get_nameservers() -> Set[str]:
 
 
 def is_only_ip(line: str) -> bool:
+    """Return True if the string is a plain IPv4 or IPv6 address."""
     try:
         ipaddress.ip_address(line.strip())
         return True
@@ -74,6 +93,7 @@ def is_only_ip(line: str) -> bool:
 
 
 def get_all_ip_addresses() -> List[str]:
+    """Return all non-loopback, non-link-local IP addresses of this machine."""
     # Parse `ip -o addr show` instead of using netifaces, which is not
     # packaged for all RPM distributions.
     ip_addresses = []
@@ -96,6 +116,7 @@ def get_all_ip_addresses() -> List[str]:
 
 
 def ips2name(addrs: Iterable[str]) -> str:
+    """Return the UCS domain found via reverse DNS of the first matching address."""
     for addr in addrs:
         fqdn = socket.getfqdn(addr)
         domainname = get_ucs_domainname_from_fqdn(fqdn)
@@ -105,6 +126,11 @@ def ips2name(addrs: Iterable[str]) -> str:
 
 
 def get_ucs_domainname_from_fqdn(fqdn: str) -> str:
+    """Return the domain part of the FQDN if it is a UCS domain, else ''.
+
+    A domain only counts as a UCS domain if the
+    ``_domaincontroller_master._tcp`` SRV record exists for it.
+    """
     try:
         domainname = fqdn.split('.', 1)[1]
         # Check if the _domaincontroller_master._tcp record exists, to ensure

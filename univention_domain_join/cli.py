@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2017-2025 Univention GmbH
 # SPDX-License-Identifier: AGPL-3.0-only
+"""Command line interface of univention-domain-join-cli (RPM edition).
+
+Parses the command line, runs pre-flight checks (root privileges,
+supported distribution, required dependencies), discovers the UCS domain
+and DC master, asks for domain administrator credentials, fetches the UCR
+variables from the DC via SSH and then hands over to the Joiner, which
+performs the actual join steps.
+"""
 
 import argparse
 import logging
@@ -33,12 +41,14 @@ REQUIRED_PYTHON_MODULES = {
 
 
 def check_if_run_as_root() -> None:
+    """Exit unless the tool runs as root; all join steps need to write to /etc."""
     if os.getuid() != 0:
         print('This tool must be executed as root.')
         exit(1)
 
 
 def check_distribution() -> None:
+    """Exit unless /etc/os-release reports a supported RPM based distribution."""
     if not distribution_is_supported():
         getLogger("userinfo").critical(
             'The used distribution "%s" is not supported. This tool supports RPM based '
@@ -48,6 +58,7 @@ def check_distribution() -> None:
 
 
 def check_dependencies() -> None:
+    """Exit with a dnf install hint if required commands or Python modules are missing."""
     missing_packages = set(
         package for command, package in REQUIRED_COMMANDS.items() if not shutil.which(command)
     )
@@ -65,6 +76,7 @@ def check_dependencies() -> None:
 
 
 def module_available(module: str) -> bool:
+    """Return True if the given Python module can be imported."""
     try:
         __import__(module)
         return True
@@ -74,6 +86,12 @@ def module_available(module: str) -> bool:
 
 @execute_as_root
 def set_up_logging(logfile: str) -> None:
+    """Configure the two loggers used throughout the tool.
+
+    'userinfo' logs to stdout and the log file, 'debugging' logs command
+    output and tracebacks to the log file only. Runs as root because the
+    default log file lives in /var/log/univention.
+    """
     verbose_formatter = logging.Formatter('%(asctime)s %(name)s %(levelname)s %(message)s')
     plain_formatter = logging.Formatter('%(message)s')
 
@@ -97,15 +115,22 @@ def set_up_logging(logfile: str) -> None:
 
 
 def get_admin_username() -> str:
+    """Prompt interactively for the name of a domain administrator."""
     return input('Please enter the user name of a domain administrator: ')
 
 
 def get_admin_password(admin_username: str) -> str:
+    """Prompt interactively (without echo) for the administrator's password."""
     # TODO: Don't ask for the password if ssh works passwordless already.
     return getpass(prompt='Please enter the password for %s: ' % (admin_username,))
 
 
 def check_if_ssh_works_with_given_account(dc_ip: str, admin_username: str, admin_pw: str) -> None:
+    """Verify that SSH to the DC works with the given credentials; exit if not.
+
+    Everything after this point (UCR fetch, UDM/LDAP operations) depends on
+    working SSH access, so fail early with a clear message.
+    """
     cmd = "true"
     ssh_process = ssh(admin_username, admin_pw, dc_ip, cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     _, stderr = ssh_process.communicate()
@@ -116,6 +141,11 @@ def check_if_ssh_works_with_given_account(dc_ip: str, admin_username: str, admin
 
 
 def get_ucr_variables_from_dc(dc_ip: str, admin_username: str, admin_pw: str) -> Dict[str, str]:
+    """Fetch all UCR variables from the DC via `ucr shell` over SSH.
+
+    The 'hostname' variable is dropped because it is the DC's host name,
+    not this client's.
+    """
     cmd = "/usr/sbin/ucr shell"
     ssh_process = ssh(admin_username, admin_pw, dc_ip, cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     assert ssh_process.stdout
@@ -135,6 +165,10 @@ def get_ucr_variables_from_dc(dc_ip: str, admin_username: str, admin_pw: str) ->
 
 
 def parse_args() -> argparse.Namespace:
+    """Define and parse the command line arguments.
+
+    Kept compatible with the Debian/Ubuntu version of the tool.
+    """
     parser = argparse.ArgumentParser(
         description='Tool for joining an RPM based client computer into an UCS domain.'
     )
@@ -152,6 +186,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Entry point: pre-flight checks, DC discovery, credentials, then join."""
     args = parse_args()
 
     check_if_run_as_root()

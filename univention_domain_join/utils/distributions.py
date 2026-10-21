@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2017-2025 Univention GmbH
 # SPDX-License-Identifier: AGPL-3.0-only
+"""Distribution detection via /etc/os-release.
+
+Replaces ``lsb_release`` from the Debian/Ubuntu version, which is not
+available (or not installed by default) on RPM based distributions.
+"""
 
 from typing import Tuple
 
@@ -20,6 +25,7 @@ SUPPORTED_DISTRIBUTIONS = (
 
 
 def _os_release() -> dict:
+    """Parse /etc/os-release into a dict; empty if the file is unreadable."""
     values = {}
     try:
         with open(OS_RELEASE) as f:
@@ -42,6 +48,7 @@ def get_distribution_id() -> str:
 
 
 def get_distribution_id_like() -> Tuple[str, ...]:
+    """IDs of distributions this one is derived from (ID_LIKE), e.g. ('rhel', 'fedora')."""
     return tuple(_os_release().get('ID_LIKE', '').split())
 
 
@@ -51,6 +58,7 @@ def get_release() -> str:
 
 
 def distribution_is_supported() -> bool:
+    """Return True for known RPM distribution IDs or RHEL/Fedora derivatives."""
     dist_id = get_distribution_id()
     if dist_id in SUPPORTED_DISTRIBUTIONS:
         return True
