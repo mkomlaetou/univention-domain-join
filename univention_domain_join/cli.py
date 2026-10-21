@@ -180,6 +180,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--domain', help='Domain name. Can be left out if the domain is configured for this system')
     parser.add_argument('--dc-ip', help='IP address of the UCS domain controller to join to. Can be used if --domain does not work. If unsure, use the IP of the UCS Master', metavar="IP")
     parser.add_argument('--force-ucs-dns', action='store_true', help='Change the system\'s DNS settings and set the UCS DC as DNS nameserver (default is to use the standard network settings, but make sure the your system can resolve the hostname of the UCS DC and the UCS master system)')
+    parser.add_argument('--register-dns', action='store_true', help='Register a DNS record for this machine in the UCS DNS zone. Only done if the primary IP address of this machine is statically configured; DHCP clients are skipped')
     parser.add_argument("--logfile", "-L", help="Path to log file %(default)s", metavar="FILE", default="/var/log/univention/domain-join-cli.log")
     args = parser.parse_args()
     return args
@@ -236,7 +237,7 @@ def main() -> None:
         check_if_ssh_works_with_given_account(args.dc_ip, args.username, password)
         ucr_variables = get_ucr_variables_from_dc(args.dc_ip, args.username, password)
 
-        joiner = Joiner(ucr_variables, args.username, password, args.dc_ip, args.skip_login_manager, args.force_ucs_dns)
+        joiner = Joiner(ucr_variables, args.username, password, args.dc_ip, args.skip_login_manager, args.force_ucs_dns, register_dns=args.register_dns)
         joiner.check_if_join_is_possible_without_problems()
         joiner.create_backup_of_config_files()
         joiner.join_domain()

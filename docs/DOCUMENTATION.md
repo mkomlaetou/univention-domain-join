@@ -52,10 +52,11 @@ Only the CLI of the upstream project was ported — the GUI was not.
    step, executed in this order):
    1. `dns_configurator.py` — only with `--force-ucs-dns`
    2. `ldap_configurator.py` (includes `root_certificate_provider.py`)
-   3. `sssd_configurator.py`
-   4. `pam_configurator.py`
-   5. `login_manager_configurator.py` (unless `--skip-login-manager`)
-   6. `kerberos_configurator.py`
+   3. `dns_record_registrar.py` — only with `--register-dns`
+   4. `sssd_configurator.py`
+   5. `pam_configurator.py`
+   6. `login_manager_configurator.py` (unless `--skip-login-manager`)
+   7. `kerberos_configurator.py`
 
 All UDM/LDAP operations are executed **on the DC over SSH**
 (`utils/ldap.py`, `utils/general.py:ssh`): the client has no local UDM
@@ -90,6 +91,23 @@ Points the client's DNS at the UCS DCs (from the UCR variables
   `/etc/ldap/ldap.conf`) pointing at the DC's LDAP port 7389.
 - Writes the machine account password to `/etc/machine.secret`
   (read-only for root).
+
+#### `dns_record_registrar.py` (only with `--register-dns`)
+
+- Determines the machine's primary IP address (the source address of the
+  route towards the DC, via `ip route get <dc-ip>`).
+- Registers only if that address is **statically configured**: checks
+  NetworkManager (`ipv4.method=manual`) first, falls back to
+  `BOOTPROTO=none/static` in `/etc/sysconfig/network-scripts/ifcfg-*`.
+  DHCP clients and undeterminable configurations are skipped with a log
+  message.
+- Sets the `ip` property and appends `dnsEntryZoneForward` on the
+  machine's computer object via `udm` on the DC — this is what makes UCS
+  create the A record in the DNS forward zone.
+- Additionally tries to append `dnsEntryZoneReverse` for the /24 reverse
+  zone of the address (skipped if that zone does not exist on the DC).
+- Runs with the same domain admin credentials as the rest of the join; a
+  failed registration only produces a warning, it does not fail the join.
 
 #### `root_certificate_provider.py` (used by the LDAP and SSSD steps)
 
@@ -183,7 +201,7 @@ usage: univention-domain-join-cli [-h] [--version] [--username USERNAME]
                                   [--password PASSWORD] [--password-file FILE]
                                   [--skip-login-manager] [--domain DOMAIN]
                                   [--dc-ip IP] [--force-ucs-dns]
-                                  [--logfile FILE]
+                                  [--register-dns] [--logfile FILE]
 ```
 
 | Option | Description |
@@ -195,6 +213,7 @@ usage: univention-domain-join-cli [-h] [--version] [--username USERNAME]
 | `--domain DOMAIN` | UCS domain name. Can be left out if the domain is auto-detectable (client FQDN, reverse DNS or DNS server in the UCS domain). |
 | `--dc-ip IP` | IP address of the UCS DC to join against. Skips domain/DC auto-detection entirely; use the DC master's IP if unsure. |
 | `--force-ucs-dns` | Reconfigure the system's DNS to use the UCS DCs as nameservers. Default: keep the existing network settings (the client must then already be able to resolve the DC's and master's host names). |
+| `--register-dns` | Register a DNS record (A record, plus PTR if a matching reverse zone exists) for this machine in the UCS DNS zone, on the machine's computer object. **Only done if the machine's primary IP address is statically configured** (NetworkManager `ipv4.method=manual` or `BOOTPROTO=none/static` in ifcfg); DHCP clients are skipped because a record written at join time would go stale with the next lease. |
 | `--logfile FILE`, `-L FILE` | Log file path (default: `/var/log/univention/domain-join-cli.log`). |
 | `--version` | Print the version and exit. |
 
@@ -281,6 +300,18 @@ running as a service the tool uses `chronyc` automatically; otherwise
 make sure one of `ntpdate`, `sntp` or `chronyd` is installed. Kerberos
 logins fail if client and DC clocks differ by more than 5 minutes —
 check with `date` against the DC and fix manually if needed.
+
+**DNS records registered with `--register-dns` do not resolve.** If the
+UMC shows the A/PTR records but `dig`/`nslookup` return NXDOMAIN with an
+authority section of `SOA 10.IN-ADDR.ARPA.` (or another RFC 1918
+parent), BIND on the DC is answering from its automatic empty zone
+instead of the UCS zone. This happens when the DNS *zone* was created
+after `named` started: with the `samba4` (DLZ) backend, BIND loads the
+zone list only at startup. Records added to an already-loaded zone go
+live immediately, but a newly created zone requires
+`systemctl restart bind9` on the DC. Also check that the zone has a
+nameserver assigned (UMC → DNS → zone settings), otherwise BIND refuses
+to load it ("zone has no NS records").
 
 **Verifying a successful join** (after a reboot):
 

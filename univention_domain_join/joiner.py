@@ -14,6 +14,7 @@ import time
 from typing import Dict
 
 from univention_domain_join.join_steps.dns_configurator import DnsConfigurator
+from univention_domain_join.join_steps.dns_record_registrar import DnsRecordRegistrar
 from univention_domain_join.join_steps.kerberos_configurator import KerberosConfigurator
 from univention_domain_join.join_steps.ldap_configurator import LdapConfigurator
 from univention_domain_join.join_steps.login_manager_configurator import LoginManagerConfigurator
@@ -41,12 +42,13 @@ class Joiner(object):
     name, Kerberos realm) plus the CLI credentials and options.
     """
 
-    def __init__(self, ucr_variables: Dict[str, str], admin_username: str, admin_pw: str, dc_ip: str, skip_login_manager: bool, force_ucs_dns: bool) -> None:
+    def __init__(self, ucr_variables: Dict[str, str], admin_username: str, admin_pw: str, dc_ip: str, skip_login_manager: bool, force_ucs_dns: bool, register_dns: bool = False) -> None:
         self.admin_username = admin_username
         self.admin_pw = admin_pw
         self.dc_ip = dc_ip
         self.skip_login_manager = skip_login_manager
         self.force_ucs_dns = force_ucs_dns
+        self.register_dns = register_dns
         self.domain = ucr_variables['domainname']
         self.nameservers = [
             ucr_variables['nameserver1'] if ucr_variables['nameserver1'] != "''" else '',
@@ -110,6 +112,8 @@ class Joiner(object):
             admin_dn = LdapConfigurator().get_admin_dn(self.dc_ip, self.admin_username, self.admin_pw, self.ldap_base)
             is_samba_dc = ldap.is_samba_dc(self.admin_username, self.admin_pw, self.dc_ip, admin_dn)
             LdapConfigurator().configure_ldap(self.dc_ip, self.ldap_server_name, self.admin_username, self.admin_pw, self.ldap_base, admin_dn)
+            if self.register_dns:
+                DnsRecordRegistrar().register_dns(self.dc_ip, self.admin_username, self.admin_pw, self.ldap_base, admin_dn, self.domain)
             SssdConfigurator().setup_sssd(self.dc_ip, self.ldap_master, self.ldap_server_name, self.admin_username, self.admin_pw, self.ldap_base, self.kerberos_realm, admin_dn, is_samba_dc)
             PamConfigurator().setup_pam()
             if not self.skip_login_manager:

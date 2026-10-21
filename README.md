@@ -70,6 +70,12 @@ Run `univention-domain-join-cli --help` for all options. The command line
 interface is compatible with the Debian/Ubuntu version, including
 `--skip-login-manager`, `--force-ucs-dns`, `--domain` and `--dc-ip`.
 
+Additionally, this port provides `--register-dns`: it registers an A record
+(and, if a matching reverse zone exists, a PTR record) for the machine in
+the UCS DNS zone. Registration only happens when the machine's primary IP
+address is statically configured — DHCP clients are skipped, because a
+record written at join time would go stale with the next lease.
+
 The GUI of the original project was not ported — only the CLI is provided.
 
 Before anything is changed, a backup of all modified configuration files is
