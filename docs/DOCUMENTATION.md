@@ -55,8 +55,10 @@ Only the CLI of the upstream project was ported — the GUI was not.
    3. `dns_record_registrar.py` — only with `--register-dns`
    4. `sssd_configurator.py`
    5. `pam_configurator.py`
-   6. `login_manager_configurator.py` (unless `--skip-login-manager`)
-   7. `kerberos_configurator.py`
+   6. `sudoers_configurator.py` — only with `--sudo-groups` and/or
+      `--sudo-groups-nopasswd`
+   7. `login_manager_configurator.py` (unless `--skip-login-manager`)
+   8. `kerberos_configurator.py`
 
 All UDM/LDAP operations are executed **on the DC over SSH**
 (`utils/ldap.py`, `utils/general.py:ssh`): the client has no local UDM
@@ -143,6 +145,21 @@ Points the client's DNS at the UCS DCs (from the UCR variables
 - Enables and starts `oddjobd` (needed by `pam_oddjob_mkhomedir` to
   actually create home directories).
 
+#### `sudoers_configurator.py` (only with `--sudo-groups` / `--sudo-groups-nopasswd`)
+
+- Renders one sudo rule per given domain group:
+  - `--sudo-groups` → `%<group> ALL=(ALL:ALL) ALL` (sudo asks for the
+    user's own password; the recommended variant for human admins)
+  - `--sudo-groups-nopasswd` → `%<group> ALL=(ALL:ALL) NOPASSWD: ALL`
+    (passwordless; intended for automation/lab use, marked with a warning
+    comment in the generated file)
+  - Spaces in group names are escaped. Both options can be combined.
+- Validates the generated file with `visudo -c` *before* installing it —
+  an invalid sudoers file would break sudo for everyone.
+- Installs it as `/etc/sudoers.d/50-ucs-domain-groups` with mode 0440
+  (sudo ignores files with looser permissions). Removed again by
+  `--disjoin`.
+
 #### `login_manager_configurator.py` (unless `--skip-login-manager`)
 
 - Detects the active display manager through the
@@ -187,6 +204,7 @@ relative paths).
 | `/etc/resolv.conf` | Written directly, only with `--force-ucs-dns` and without NetworkManager |
 | NetworkManager connection profiles | `ipv4.dns`/`ipv4.dns-search` modified via `nmcli`, only with `--force-ucs-dns` (no file backup — settings live in NM's profiles) |
 | `/etc/lightdm/lightdm.conf.d/99-show-manual-userlogin.conf` | Written (LightDM only) |
+| `/etc/sudoers.d/50-ucs-domain-groups` | Written, only with `--sudo-groups`/`--sudo-groups-nopasswd` (mode 0440, validated with `visudo`) |
 | `/var/log/univention/domain-join-cli.log` | Log file (default; see `--logfile`) |
 | `/var/univention-backup/<timestamp>_domain-join/` | Backup of all of the above |
 
@@ -201,7 +219,11 @@ usage: univention-domain-join-cli [-h] [--version] [--username USERNAME]
                                   [--password PASSWORD] [--password-file FILE]
                                   [--skip-login-manager] [--domain DOMAIN]
                                   [--dc-ip IP] [--force-ucs-dns]
-                                  [--register-dns] [--logfile FILE]
+                                  [--register-dns]
+                                  [--sudo-groups GROUPS]
+                                  [--sudo-groups-nopasswd GROUPS]
+                                  [--disjoin] [--local-only] [--yes]
+                                  [--logfile FILE]
 ```
 
 | Option | Description |
@@ -214,6 +236,8 @@ usage: univention-domain-join-cli [-h] [--version] [--username USERNAME]
 | `--dc-ip IP` | IP address of the UCS DC to join against. Skips domain/DC auto-detection entirely; use the DC master's IP if unsure. |
 | `--force-ucs-dns` | Reconfigure the system's DNS to use the UCS DCs as nameservers. Default: keep the existing network settings (the client must then already be able to resolve the DC's and master's host names). |
 | `--register-dns` | Register a DNS record (A record, plus PTR if a matching reverse zone exists) for this machine in the UCS DNS zone, on the machine's computer object. **Only done if the machine's primary IP address is statically configured** (NetworkManager `ipv4.method=manual` or `BOOTPROTO=none/static` in ifcfg); DHCP clients are skipped because a record written at join time would go stale with the next lease. |
+| `--sudo-groups GROUPS` | Comma-separated list of domain groups that get full sudo rights with password authentication, e.g. `--sudo-groups "Domain Admins,IT-Support"`. Writes `/etc/sudoers.d/50-ucs-domain-groups` with `%<group> ALL=(ALL:ALL) ALL` rules (validated with `visudo` before installation, mode 0440). Group names with spaces are escaped automatically; the groups resolve through SSSD at runtime. Recommended variant for human administrators. |
+| `--sudo-groups-nopasswd GROUPS` | Same as `--sudo-groups`, but the rules are `%<group> ALL=(ALL:ALL) NOPASSWD: ALL` — sudo never asks for a password. Convenient for automation and lab machines, but anyone in these groups can become root without any credential check; do not use it for human admin accounts on production systems. Both options can be combined in one join. |
 | `--disjoin` | Leave the domain instead of joining: deletes the machine's computer object on the DC (its DNS records go with it) and cleans up all local configuration (see below). Asks for confirmation unless `--yes` is given. |
 | `--local-only` | With `--disjoin`: only clean up the local machine and keep the computer object on the DC. No credentials or DC connectivity needed. |
 | `--yes` | With `--disjoin`: skip the confirmation prompt. |
@@ -313,9 +337,21 @@ sudo dnf install epel-release
 ```
 
 The CLI checks at startup that `ssh`, `sshpass`, `ldapsearch`,
-`systemctl`, the Python modules `dns` and `ldap`, and `wget` or `curl`
-are available, and prints a ready-to-use `dnf install` command if
+`systemctl`, `visudo`, the Python modules `dns` and `ldap`, and `wget` or
+`curl` are available, and prints a ready-to-use `dnf install` command if
 anything is missing.
+
+**PATH note.** `pip install` places the `univention-domain-join-cli`
+script in `/usr/local/bin`, which is not part of sudo's `secure_path` on
+RHEL-likes — `sudo univention-domain-join-cli` would not be found. Either
+symlink it into `/usr/bin`:
+
+```
+sudo ln -sf /usr/local/bin/univention-domain-join-cli /usr/bin/univention-domain-join-cli
+```
+
+or install the RPM package, which installs the script into `/usr/bin`
+directly.
 
 ## Troubleshooting
 

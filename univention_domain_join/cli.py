@@ -35,6 +35,7 @@ REQUIRED_COMMANDS = {
     'sshpass': 'sshpass',
     'ldapsearch': 'openldap-clients',
     'systemctl': 'systemd',
+    'visudo': 'sudo',
 }
 REQUIRED_PYTHON_MODULES = {
     'dns': 'python3-dns',
@@ -195,6 +196,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--dc-ip', help='IP address of the UCS domain controller to join to. Can be used if --domain does not work. If unsure, use the IP of the UCS Master', metavar="IP")
     parser.add_argument('--force-ucs-dns', action='store_true', help='Change the system\'s DNS settings and set the UCS DC as DNS nameserver (default is to use the standard network settings, but make sure the your system can resolve the hostname of the UCS DC and the UCS master system)')
     parser.add_argument('--register-dns', action='store_true', help='Register a DNS record for this machine in the UCS DNS zone. Only done if the primary IP address of this machine is statically configured; DHCP clients are skipped')
+    parser.add_argument('--sudo-groups', help='Comma-separated list of domain groups that get full sudo rights (password required), e.g. "Domain Admins,IT-Support"', metavar='GROUPS')
+    parser.add_argument('--sudo-groups-nopasswd', help='Comma-separated list of domain groups that get passwordless sudo rights (NOPASSWD). Intended for automation/lab use only — prefer --sudo-groups for human admins', metavar='GROUPS')
     parser.add_argument('--disjoin', action='store_true', help='Leave the UCS domain: remove the computer object on the DC and clean up all local configuration created by the join')
     parser.add_argument('--local-only', action='store_true', help='With --disjoin: only clean up the local machine, do not remove the computer object on the DC (no credentials needed)')
     parser.add_argument('--yes', action='store_true', help='With --disjoin: do not ask for confirmation')
@@ -291,7 +294,9 @@ def main() -> None:
         check_if_ssh_works_with_given_account(args.dc_ip, args.username, password)
         ucr_variables = get_ucr_variables_from_dc(args.dc_ip, args.username, password)
 
-        joiner = Joiner(ucr_variables, args.username, password, args.dc_ip, args.skip_login_manager, args.force_ucs_dns, register_dns=args.register_dns)
+        sudo_groups = [g.strip() for g in (args.sudo_groups or '').split(',') if g.strip()]
+        sudo_groups_nopasswd = [g.strip() for g in (args.sudo_groups_nopasswd or '').split(',') if g.strip()]
+        joiner = Joiner(ucr_variables, args.username, password, args.dc_ip, args.skip_login_manager, args.force_ucs_dns, register_dns=args.register_dns, sudo_groups=sudo_groups, sudo_groups_nopasswd=sudo_groups_nopasswd)
         joiner.check_if_join_is_possible_without_problems()
         joiner.create_backup_of_config_files()
         joiner.join_domain()

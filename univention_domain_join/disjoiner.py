@@ -47,6 +47,7 @@ RESTORABLE_PATHS = [
     'etc/security/group.conf',
     'etc/nsswitch.conf',
     'etc/lightdm/lightdm.conf.d/99-show-manual-userlogin.conf',
+    'etc/sudoers.d/50-ucs-domain-groups',
     'etc/resolv.conf',
 ]
 
@@ -57,6 +58,7 @@ JOIN_CREATED_PATHS = [
     '/etc/openldap/ldap.conf',
     '/etc/sssd/sssd.conf',
     '/etc/lightdm/lightdm.conf.d/99-show-manual-userlogin.conf',
+    '/etc/sudoers.d/50-ucs-domain-groups',
 ]
 
 # Files the join always created; unconditionally deleted on disjoin.

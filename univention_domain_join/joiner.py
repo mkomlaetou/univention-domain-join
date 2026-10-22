@@ -20,6 +20,7 @@ from univention_domain_join.join_steps.ldap_configurator import LdapConfigurator
 from univention_domain_join.join_steps.login_manager_configurator import LoginManagerConfigurator
 from univention_domain_join.join_steps.pam_configurator import PamConfigurator
 from univention_domain_join.join_steps.sssd_configurator import SssdConfigurator
+from univention_domain_join.join_steps.sudoers_configurator import SudoersConfigurator
 from univention_domain_join.utils import ldap
 from univention_domain_join.utils.general import execute_as_root, name_is_resolvable
 
@@ -42,13 +43,15 @@ class Joiner(object):
     name, Kerberos realm) plus the CLI credentials and options.
     """
 
-    def __init__(self, ucr_variables: Dict[str, str], admin_username: str, admin_pw: str, dc_ip: str, skip_login_manager: bool, force_ucs_dns: bool, register_dns: bool = False) -> None:
+    def __init__(self, ucr_variables: Dict[str, str], admin_username: str, admin_pw: str, dc_ip: str, skip_login_manager: bool, force_ucs_dns: bool, register_dns: bool = False, sudo_groups: list = None, sudo_groups_nopasswd: list = None) -> None:
         self.admin_username = admin_username
         self.admin_pw = admin_pw
         self.dc_ip = dc_ip
         self.skip_login_manager = skip_login_manager
         self.force_ucs_dns = force_ucs_dns
         self.register_dns = register_dns
+        self.sudo_groups = sudo_groups or []
+        self.sudo_groups_nopasswd = sudo_groups_nopasswd or []
         self.domain = ucr_variables['domainname']
         self.nameservers = [
             ucr_variables['nameserver1'] if ucr_variables['nameserver1'] != "''" else '',
@@ -83,6 +86,8 @@ class Joiner(object):
         if not self.skip_login_manager:
             LoginManagerConfigurator().backup(backup_dir)
         KerberosConfigurator().backup(backup_dir)
+        if self.sudo_groups or self.sudo_groups_nopasswd:
+            SudoersConfigurator(self.sudo_groups, self.sudo_groups_nopasswd).backup(backup_dir)
         userinfo_logger.info('Created a backup of all configuration files, that will be modified at \'%s\'.' % backup_dir)
 
     @execute_as_root
@@ -116,6 +121,8 @@ class Joiner(object):
                 DnsRecordRegistrar().register_dns(self.dc_ip, self.admin_username, self.admin_pw, self.ldap_base, admin_dn, self.domain)
             SssdConfigurator().setup_sssd(self.dc_ip, self.ldap_master, self.ldap_server_name, self.admin_username, self.admin_pw, self.ldap_base, self.kerberos_realm, admin_dn, is_samba_dc)
             PamConfigurator().setup_pam()
+            if self.sudo_groups or self.sudo_groups_nopasswd:
+                SudoersConfigurator(self.sudo_groups, self.sudo_groups_nopasswd).setup_sudoers()
             if not self.skip_login_manager:
                 LoginManagerConfigurator().enable_login_with_foreign_usernames()
             KerberosConfigurator().configure_kerberos(self.kerberos_realm, self.ldap_master, self.ldap_server_name, is_samba_dc, self.dc_ip)

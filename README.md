@@ -32,25 +32,33 @@ Supported distributions:
 
 ## Installation
 
-### From the RPM package
+<!-- ### From the RPM package
 
 Build the RPM and install it — all dependencies are pulled in automatically:
 
 ```
-sudo dnf install rpm-build python3-devel python3-setuptools
+sudo dnf install rpm-build python3-devel python3-setuptools python3-pip -y
+pip install build
 python3 -m build --sdist .            # or: python3 setup.py sdist
 rpmbuild -ta dist/univention-domain-join-cli-1.0.0.tar.gz
 sudo dnf install ~/rpmbuild/RPMS/noarch/univention-domain-join-cli-1.0.0-1.*.noarch.rpm
-```
+``` -->
 
 ### With pip
 
 ```
 sudo dnf install python3-dns python3-ldap openssh-clients sshpass \
     openldap-clients sssd sssd-ldap sssd-krb5 krb5-workstation authselect \
-    oddjob-mkhomedir oddjob wget pip
+    oddjob-mkhomedir oddjob wget pip -y
 sudo pip install .
+sudo ln -sf /usr/local/bin/univention-domain-join-cli /usr/bin/univention-domain-join-cli
 ```
+
+The symlink puts the command on root's PATH: pip installs scripts to
+`/usr/local/bin`, which is not part of sudo's `secure_path` on
+RHEL-likes, so `sudo univention-domain-join-cli` would not be found
+otherwise. (The RPM package installs directly into `/usr/bin` and does
+not need this step.)
 
 ## Usage
 
@@ -75,6 +83,21 @@ Additionally, this port provides `--register-dns`: it registers an A record
 the UCS DNS zone. Registration only happens when the machine's primary IP
 address is statically configured — DHCP clients are skipped, because a
 record written at join time would go stale with the next lease.
+
+With `--sudo-groups` you can grant domain groups sudo rights at join
+time; the groups are written to `/etc/sudoers.d/50-ucs-domain-groups`
+(validated with `visudo` before being installed):
+
+```
+sudo univention-domain-join-cli --dc-ip 10.0.0.1 --sudo-groups "Domain Admins,IT-Support"
+```
+
+`--sudo-groups` requires members to re-enter their password for sudo —
+this is the recommended variant for human admins. The alternative
+`--sudo-groups-nopasswd` grants passwordless sudo (`NOPASSWD: ALL`) and
+is intended for automation accounts and lab machines only; passwordless
+sudo removes the re-authentication barrier, so anyone hijacking a group
+member's session gets instant root.
 
 To leave the domain again, use `--disjoin`: it deletes the machine's
 computer object on the DC (including its DNS records), restores the
