@@ -50,7 +50,7 @@ Install the dependencies and the tool from source:
 sudo apt update
 sudo DEBIAN_FRONTEND=noninteractive apt install \
     python3-dnspython python3-ldap python3-netifaces python3-ipy python3-pip \
-    openssh-client sshpass ldap-utils sssd sssd-ldap sssd-krb5 krb5-user wget -y
+    openssh-client sshpass ldap-utils sssd sssd-ldap sssd-krb5 krb5-user wget git -y
 git clone https://github.com/mkomlaetou/univention-domain-join-deb.git
 cd univention-domain-join-deb
 sudo pip install --break-system-packages .
