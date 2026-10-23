@@ -49,7 +49,7 @@ sudo dnf install ~/rpmbuild/RPMS/noarch/univention-domain-join-cli-1.0.0-1.*.noa
 ```
 sudo dnf install python3-dns python3-ldap openssh-clients sshpass \
     openldap-clients sssd sssd-ldap sssd-krb5 krb5-workstation authselect \
-    oddjob-mkhomedir oddjob wget pip -y
+    oddjob-mkhomedir oddjob wget pip git -y
 git clone https://github.com/mkomlaetou/univention-domain-join-rpm.git
 cd univention-domain-join-rpm
 sudo pip install .
