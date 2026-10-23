@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Univention Domain Join
+GenericName=Domain Join Assistant
+Comment=Integrate your system into an UCS domain
+Categories=System;
+Keywords=UCS;
+Exec=pkexec univention-domain-join
+Icon=univention-domain-join
